@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Face Mesh Index Debugger</title>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: #111;
+      color: white;
+      font-family: 'Inter', sans-serif;
+    }
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      object-fit: contain; /* ensures aspect ratio of camera matches */
+    }
+    #info-panel {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      background: rgba(0, 0, 0, 0.8);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      padding: 15px 20px;
+      border-radius: 8px;
+      pointer-events: none;
+      min-width: 200px;
+    }
+    h1 {
+      margin: 0 0 10px 0;
+      font-size: 16px;
+      color: #00FFCC;
+    }
+    .data-row {
+      margin: 5px 0;
+      font-size: 14px;
+      display: flex;
+      justify-content: space-between;
+    }
+    .data-label {
+      color: #888;
+    }
+    .data-value {
+      font-weight: bold;
+      color: #FFF;
+    }
+    #controls {
+      position: absolute;
+      bottom: 20px;
+      left: 20px;
+      background: rgba(0, 0, 0, 0.8);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      padding: 15px 20px;
+      border-radius: 8px;
+      display: flex;
+      gap: 15px;
+      align-items: center;
+    }
+    label {
+      font-size: 14px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+  </style>
+</head>
+<body>
+  <video id="video" style="display:none;" autoplay playsinline></video>
+  <canvas id="output_canvas"></canvas>
+  
+  <div id="info-panel">
+    <h1>Face Mesh Index Debugger</h1>
+    <div class="data-row">
+      <span class="data-label">Hovered Index:</span>
+      <span class="data-value" id="val-index">None</span>
+    </div>
+    <div class="data-row" style="display: none;" id="row-coords">
+      <span class="data-label">Coords (x, y):</span>
+      <span class="data-value" id="val-coords"></span>
+    </div>
+    <div style="margin-top: 10px; font-size: 12px; color: #aaa;">
+      Move your mouse over the points to discover their vertex IDs.
+    </div>
+  </div>
+
+  <div id="controls">
+    <label>
+      <input type="checkbox" id="toggle-video" checked> Show Video
+    </label>
+    <label>
+      <input type="checkbox" id="toggle-points" checked> Show Points
+    </label>
+    <label>
+      <input type="checkbox" id="toggle-indices"> Show Indices
+    </label>
+    <div style="width: 1px; height: 20px; background: rgba(255,255,255,0.3); margin: 0 10px;"></div>
+    <label>
+      Zoom: <input type="range" id="zoom-slider" min="1" max="10" step="0.1" value="1" style="width: 80px;">
+    </label>
+    <button id="reset-view" style="background:#333; color:#fff; border:1px solid #555; border-radius:4px; padding:4px 8px; cursor:pointer;">Reset</button>
+  </div>
+
+  <script>
+    const videoElement = document.getElementById('video');
+    const canvasElement = document.getElementById('output_canvas');
+    const canvasCtx = canvasElement.getContext('2d');
+    
+    const valIndex = document.getElementById('val-index');
+    const valCoords = document.getElementById('val-coords');
+    const rowCoords = document.getElementById('row-coords');
+    
+    const toggleVideo = document.getElementById('toggle-video');
+    const togglePoints = document.getElementById('toggle-points');
+    const toggleIndices = document.getElementById('toggle-indices');
+
+    const zoomSlider = document.getElementById('zoom-slider');
+    const resetViewBtn = document.getElementById('reset-view');
+
+    let currentLandmarks = null;
+    let mouseX = -100;
+    let mouseY = -100;
+
+    let scale = 1;
+    let panX = 0;
+    let panY = 0;
+    let isDragging = false;
+    let lastDragX = 0;
+    let lastDragY = 0;
+
+    let videoWidth = 0;
+    let videoHeight = 0;
+
+    function resizeCanvas() {
+      canvasElement.width = window.innerWidth;
+      canvasElement.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    canvasElement.addEventListener('mousedown', (e) => {
+      isDragging = true;
+      lastDragX = e.clientX;
+      lastDragY = e.clientY;
+    });
+    
+    window.addEventListener('mouseup', () => {
+      isDragging = false;
+    });
+
+    canvasElement.addEventListener('mousemove', (e) => {
+      if (isDragging) {
+        panX += e.clientX - lastDragX;
+        panY += e.clientY - lastDragY;
+        lastDragX = e.clientX;
+        lastDragY = e.clientY;
+      }
+      mouseX = e.clientX;
+      mouseY = e.clientY;
+    });
+
+    canvasElement.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const zoomFactor = -e.deltaY * 0.001;
+      const oldScale = scale;
+      scale = Math.max(1, Math.min(scale * Math.exp(zoomFactor), 15));
+
+      panX = mouseX - (mouseX - panX) * (scale / oldScale);
+      panY = mouseY - (mouseY - panY) * (scale / oldScale);
+
+      zoomSlider.value = scale;
+    }, { passive: false });
+
+    zoomSlider.addEventListener('input', (e) => {
+      const newScale = parseFloat(e.target.value);
+      const centerX = canvasElement.width / 2;
+      const centerY = canvasElement.height / 2;
+      panX = centerX - (centerX - panX) * (newScale / scale);
+      panY = centerY - (centerY - panY) * (newScale / scale);
+      scale = newScale;
+    });
+
+    resetViewBtn.addEventListener('click', () => {
+      scale = 1;
+      panX = 0;
+      panY = 0;
+      zoomSlider.value = 1;
+    });
+    
+    canvasElement.addEventListener('mouseleave', () => {
+      if (!isDragging) {
+        mouseX = -100;
+        mouseY = -100;
+      }
+    });
+
+    function getCanvasDrawRect(videoRatio, canvasWidth, canvasHeight) {
+      const canvasRatio = canvasWidth / canvasHeight;
+      let drawWidth, drawHeight, offsetX, offsetY;
+
+      if (canvasRatio > videoRatio) {
+        drawHeight = canvasHeight;
+        drawWidth = canvasHeight * videoRatio;
+        offsetX = (canvasWidth - drawWidth) / 2;
+        offsetY = 0;
+      } else {
+        drawWidth = canvasWidth;
+        drawHeight = canvasWidth / videoRatio;
+        offsetX = 0;
+        offsetY = (canvasHeight - drawHeight) / 2;
+      }
+      return { drawWidth, drawHeight, offsetX, offsetY };
+    }
+
+    function onResults(results) {
+      if (!videoWidth && results.image.width) {
+        videoWidth = results.image.width;
+        videoHeight = results.image.height;
+      }
+
+      canvasCtx.save();
+      canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+      
+      let rect = { drawWidth: canvasElement.width, drawHeight: canvasElement.height, offsetX: 0, offsetY: 0 };
+      
+      if (videoWidth && videoHeight) {
+        const videoRatio = videoWidth / videoHeight;
+        rect = getCanvasDrawRect(videoRatio, canvasElement.width, canvasElement.height);
+      }
+
+      // Draw video frame
+      if (toggleVideo.checked && results.image) {
+        canvasCtx.save();
+        canvasCtx.translate(panX, panY);
+        canvasCtx.scale(scale, scale);
+        canvasCtx.drawImage(results.image, rect.offsetX, rect.offsetY, rect.drawWidth, rect.drawHeight);
+        canvasCtx.restore();
+      }
+
+      if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+        currentLandmarks = results.multiFaceLandmarks[0];
+        
+        let hoveredIndex = -1;
+        let minDist = 15; // Hover threshold in pixels
+        const showPoints = togglePoints.checked;
+        const showIndices = toggleIndices.checked;
+
+        // Draw points and find hovered
+        currentLandmarks.forEach((landmark, index) => {
+          let bx = rect.offsetX + landmark.x * rect.drawWidth;
+          let by = rect.offsetY + landmark.y * rect.drawHeight;
+          const x = bx * scale + panX;
+          const y = by * scale + panY;
+          
+          const dist = Math.hypot(x - mouseX, y - mouseY);
+          if (dist < minDist) {
+            minDist = dist;
+            hoveredIndex = index;
+          }
+
+          if (showIndices) {
+            canvasCtx.fillStyle = 'rgba(0, 255, 204, 0.9)';
+            canvasCtx.font = '8px Inter, sans-serif';
+            canvasCtx.fillText(index, x - 5, y + 3);
+          } else if (showPoints) {
+            canvasCtx.beginPath();
+            canvasCtx.arc(x, y, 1.5 * scale, 0, 2 * Math.PI);
+            canvasCtx.fillStyle = 'rgba(0, 255, 204, 0.5)';
+            canvasCtx.fill();
+          }
+        });
+
+        // Highlight hovered
+        if (hoveredIndex !== -1) {
+          const landmark = currentLandmarks[hoveredIndex];
+          let bx = rect.offsetX + landmark.x * rect.drawWidth;
+          let by = rect.offsetY + landmark.y * rect.drawHeight;
+          const x = bx * scale + panX;
+          const y = by * scale + panY;
+
+          canvasCtx.beginPath();
+          canvasCtx.arc(x, y, 6 * scale, 0, 2 * Math.PI);
+          canvasCtx.fillStyle = '#FF0055';
+          canvasCtx.fill();
+          
+          canvasCtx.beginPath();
+          canvasCtx.arc(x, y, 2 * scale, 0, 2 * Math.PI);
+          canvasCtx.fillStyle = '#FFF';
+          canvasCtx.fill();
+
+          valIndex.textContent = hoveredIndex;
+          valIndex.style.color = '#FF0055';
+          
+          rowCoords.style.display = 'flex';
+          valCoords.textContent = `${landmark.x.toFixed(3)}, ${landmark.y.toFixed(3)}`;
+          
+          // Draw text near point
+          canvasCtx.fillStyle = '#FFF';
+          canvasCtx.font = 'bold 16px Inter, sans-serif';
+          canvasCtx.shadowColor = 'rgba(0,0,0,0.8)';
+          canvasCtx.shadowBlur = 4;
+          canvasCtx.shadowOffsetX = 1;
+          canvasCtx.shadowOffsetY = 1;
+          canvasCtx.fillText(hoveredIndex, x + 10, y - 10);
+          
+          canvasCtx.shadowBlur = 0; // reset
+        } else {
+          valIndex.textContent = 'None';
+          valIndex.style.color = '#FFF';
+          rowCoords.style.display = 'none';
+        }
+      }
+      canvasCtx.restore();
+    }
+
+    const faceMesh = new FaceMesh({locateFile: (file) => {
+      return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
+    }});
+    
+    faceMesh.setOptions({
+      maxNumFaces: 1,
+      refineLandmarks: true,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5
+    });
+    
+    faceMesh.onResults(onResults);
+
+    const camera = new Camera(videoElement, {
+      onFrame: async () => {
+        await faceMesh.send({image: videoElement});
+      },
+      width: 1280,
+      height: 720
+    });
+    
+    camera.start();
+  </script>
+</body>
+</html>

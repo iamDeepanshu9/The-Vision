@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Light Nodes</title>
+  <meta name="description" content="Interactive light nodes game with real-time hand tracking">
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&display=swap" rel="stylesheet">
+
+  <!-- MediaPipe CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+
+<body>
+  <!-- Hidden video for webcam feed (used by MediaPipe, never rendered) -->
+  <video class="input-video" autoplay playsinline></video>d
+
+  <!-- Game canvas -->
+  <canvas id="game"></canvas>
+
+  <!-- Link to Visualizer -->
+  <a href="visualizer.html" style="
+    position: fixed;
+    top: 24px; left: 28px;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    text-decoration: none;
+    color: rgba(255,255,255,0.45);
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0.2px;
+    padding: 8px 16px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 100px;
+    backdrop-filter: blur(10px);
+    transition: color 0.2s, background 0.2s;
+  " onmouseover="this.style.color='rgba(255,255,255,0.75)'; this.style.background='rgba(255,255,255,0.09)';"
+    onmouseout="this.style.color='rgba(255,255,255,0.45)'; this.style.background='rgba(255,255,255,0.05)';">
+    Hand Visualizer Mode
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+      stroke-linejoin="round" style="width:14px; height:14px;">
+      <path d="M6 13l5-5-5-5" />
+    </svg>
+  </a>
+
+  <!-- Gesture hints -->
+  <div class="gesture-hint">
+    <span>pinch · grab &amp; throw</span>
+    <span class="sep">—</span>
+    <span>same node · split</span>
+    <span class="sep">—</span>
+    <span>diff nodes close · connect</span>
+    <span class="sep">—</span>
+    <span>both hands ×3 pinch air · new dot</span>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+
+</html>

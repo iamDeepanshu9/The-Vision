@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hand & Face Visualizer · The Vision</title>
+  <meta name="description" content="Real-time hand and face tracking with glowing vein effect">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+
+  <style>
+    *,
+    *::before,
+    *::after {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #020204;
+      /* Very dark blue-black */
+      font-family: 'Inter', system-ui, sans-serif;
+    }
+
+    video {
+      position: absolute;
+      width: 0;
+      height: 0;
+      opacity: 0;
+    }
+
+    canvas {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      display: block;
+    }
+
+    /* Back link */
+    .nav-back {
+      position: fixed;
+      top: 24px;
+      left: 28px;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      text-decoration: none;
+      color: rgba(255, 255, 255, 0.45);
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: 0.2px;
+      padding: 8px 16px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 100px;
+      backdrop-filter: blur(10px);
+      transition: color 0.2s, background 0.2s;
+    }
+
+    .nav-back:hover {
+      color: rgba(255, 255, 255, 0.75);
+      background: rgba(255, 255, 255, 0.09);
+    }
+
+    .nav-back svg {
+      width: 14px;
+      height: 14px;
+    }
+
+    /* Status pill */
+    .status {
+      position: fixed;
+      bottom: 28px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 9px 20px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      border-radius: 100px;
+      color: rgba(255, 255, 255, 0.35);
+      font-size: 12px;
+      backdrop-filter: blur(10px);
+      pointer-events: none;
+      transition: opacity 0.5s;
+      white-space: nowrap;
+    }
+  </style>
+</head>
+
+<body>
+  <video class="input-video" autoplay playsinline></video>
+
+  <canvas id="c"
+    style="position:fixed; top:0; left:0; width:100vw; height:100vh; z-index:2; pointer-events:none;"></canvas>
+
+  <a class="nav-back" style="pointer-events:auto;" href="index.html">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+      stroke-linejoin="round">
+      <path d="M10 3L5 8l5 5" />
+    </svg>
+    Back to Game
+  </a>
+
+  <div class="status" id="status">Waiting for camera…</div>
+
+  <script>
+    (() => {
+      const canvas = document.getElementById('c');
+      const ctx = canvas.getContext('2d');
+      const offCanvas = document.createElement('canvas');
+      const offCtx = offCanvas.getContext('2d');
+      const videoEl = document.querySelector('.input-video');
+      const status = document.getElementById('status');
+
+      function resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        offCanvas.width = canvas.width;
+        offCanvas.height = canvas.height;
+      }
+      window.addEventListener('resize', resize);
+      resize();
+
+
+      // ── Seeded PRNG for stable vein generation ──
+      function splitmix32(a) {
+        return function () {
+          a |= 0; a = a + 0x9e3779b9 | 0;
+          let t = a ^ a >>> 16;
+          t = Math.imul(t, 0x21f0aaad);
+          t = t ^ t >>> 15;
+          t = Math.imul(t, 0x735a2d97);
+          return ((t = t ^ t >>> 15) >>> 0) / 4294967296;
+        }
+      }
+
+      // ── Topology Generation ──
+      function generateTopology(seed, depth) {
+        const rng = splitmix32(seed);
+        const path = [];
+        const numPoints = 4;
+        for (let i = 0; i <= numPoints; i++) {
+          let t = i / numPoints;
+          let offset = (rng() - 0.5) * 0.35;
+          if (i === 0 || i === numPoints) offset = 0;
+          path.push({ t, offset });
+        }
+
+        const branches = [];
+        if (depth > 0) {
+          const numBranches = Math.floor(rng() * 3) + 1;
+          for (let i = 0; i < numBranches; i++) {
+            const nodeIndex = 1 + Math.floor(rng() * (numPoints - 1));
+            const angle = (rng() - 0.5) * 1.5;
+            const bLen = 0.3 + rng() * 0.6;
+            branches.push({
+              nodeIndex, angle, length: bLen,
+              topology: generateTopology(rng() * 10000, depth - 1)
+            });
+          }
+        }
+        return { path, branches };
+      }
+
+      // ── Topologies Data ──
+      const topologies = {};
+
+      const BONE_CONNECTIONS = [
+        [0, 1], [1, 2], [2, 3], [3, 4],       // Thumb
+        [0, 5], [5, 6], [6, 7], [7, 8],       // Index
+        [0, 9], [9, 10], [10, 11], [11, 12],  // Middle
+        [0, 13], [13, 14], [14, 15], [15, 16],// Ring
+        [0, 17], [17, 18], [18, 19], [19, 20] // Pinky
+      ];
+      const WEB_CONNECTIONS = [
+        [5, 9], [9, 13], [13, 17], [1, 5]
+      ];
+      BONE_CONNECTIONS.forEach((pair, idx) => {
+        topologies['H-' + pair.join('-')] = generateTopology(1337 + idx * 100, 2);
+      });
+      WEB_CONNECTIONS.forEach((pair, idx) => {
+        topologies['H-' + pair.join('-')] = generateTopology(9999 + idx * 100, 1);
+      });
+
+
+      // ── MediaPipe Setup ──
+      let handsData = [];
+      let facesData = [];
+
+      function checkStatus() {
+        if (handsData.length > 0 || facesData.length > 0) status.style.opacity = '0';
+        else {
+          status.style.opacity = '1';
+          status.textContent = 'Show your hands or face…';
+        }
+      }
+
+      /* global Hands, FaceMesh, Camera */
+      const hands = new Hands({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+      hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.6, minTrackingConfidence: 0.5 });
+      hands.onResults(res => { handsData = res.multiHandLandmarks || []; checkStatus(); });
+
+      const faceMesh = new FaceMesh({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
+      faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: 0.6, minTrackingConfidence: 0.5 });
+      faceMesh.onResults(res => { facesData = res.multiFaceLandmarks || []; checkStatus(); });
+
+      const camera = new Camera(videoEl, {
+        onFrame: async () => {
+          // IMPORTANT: Do not use Promise.all here! MediaPipe models use WebAssembly 
+          // and WebGL internally. Sending the video texture to both concurrently can 
+          // cause a WebGL deadlock in the browser, freezing the camera loop forever.
+          // We must process them sequentially.
+          try {
+            await hands.send({ image: videoEl });
+            await faceMesh.send({ image: videoEl });
+          } catch (e) {
+            console.error("Model processing error:", e);
+          }
+        },
+        width: 1280, height: 720,
+      });
+
+      status.textContent = 'Loading AI Models (this can take 10-20 seconds)...';
+      camera.start().catch((err) => {
+        console.error("Camera error:", err);
+        status.textContent = 'Camera access denied';
+      });
+
+      // ── Drawing Helpers ──
+      function lmToCanvas(lm) {
+        return { x: (1 - lm.x) * canvas.width, y: lm.y * canvas.height };
+      }
+
+      function drawSmoothPath(path2d, points) {
+        if (points.length === 0) return;
+        path2d.moveTo(points[0].x, points[0].y);
+        if (points.length === 2) {
+          path2d.lineTo(points[1].x, points[1].y);
+          return;
+        }
+        for (let i = 1; i < points.length - 2; i++) {
+          const xc = (points[i].x + points[i + 1].x) / 2;
+          const yc = (points[i].y + points[i + 1].y) / 2;
+          path2d.quadraticCurveTo(points[i].x, points[i].y, xc, yc);
+        }
+        const last = points.length - 1;
+        path2d.quadraticCurveTo(points[last - 1].x, points[last - 1].y, points[last].x, points[last].y);
+      }
+
+      function addToPaths(topo, A, B, depth, pathsObj) {
+        const dx = B.x - A.x;
+        const dy = B.y - A.y;
+        const L = Math.sqrt(dx * dx + dy * dy);
+        if (L < 1) return;
+
+        const dirX = dx / L, dirY = dy / L;
+        const normX = -dirY, normY = dirX;
+
+        const points = [];
+        for (let i = 0; i < topo.path.length; i++) {
+          const p = topo.path[i];
+          points.push({
+            x: A.x + dirX * p.t * L + normX * p.offset * L,
+            y: A.y + dirY * p.t * L + normY * p.offset * L
+          });
+        }
+
+        const p2d = depth === 2 ? pathsObj.depth2 : (depth === 1 ? pathsObj.depth1 : pathsObj.depth0);
+        drawSmoothPath(p2d, points);
+
+        for (const b of topo.branches) {
+          const origin = points[b.nodeIndex];
+          const cosA = Math.cos(b.angle);
+          const sinA = Math.sin(b.angle);
+          const bDirX = dirX * cosA - dirY * sinA;
+          const bDirY = dirY * cosA + dirX * sinA;
+
+          const endX = origin.x + bDirX * (L * b.length);
+          const endY = origin.y + bDirY * (L * b.length);
+
+          addToPaths(b.topology, origin, { x: endX, y: endY }, depth - 1, pathsObj);
+        }
+      }
+
+      function renderElectricPaths(ctx, paths, pulse) {
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        ctx.shadowColor = '#0055ff';
+        ctx.shadowBlur = 8 + pulse * 4;
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = `rgba(50, 100, 255, ${0.4 + pulse * 0.2})`;
+        ctx.stroke(paths.depth0);
+
+        ctx.shadowBlur = 12 + pulse * 6;
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = `rgba(80, 150, 255, ${0.6 + pulse * 0.2})`;
+        ctx.stroke(paths.depth1);
+
+        ctx.shadowBlur = 24 + pulse * 10;
+        ctx.lineWidth = 6;
+        ctx.strokeStyle = `rgba(120, 180, 255, ${0.8 + pulse * 0.2})`;
+        ctx.stroke(paths.depth2);
+
+        ctx.shadowBlur = 4;
+        ctx.shadowColor = '#aaddff';
+
+        ctx.lineWidth = 0.5;
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+        ctx.stroke(paths.depth0);
+
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = 'rgba(230, 245, 255, 0.8)';
+        ctx.stroke(paths.depth1);
+
+        ctx.lineWidth = 2.5;
+        ctx.strokeStyle = 'rgba(255, 255, 255, 1)';
+        ctx.stroke(paths.depth2);
+      }
+
+
+      // ── Main Render Loop ──
+      function loop() {
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.clearRect(0, 0, canvas.width, canvas.height); // Let SVG and CSS background show through
+
+        offCtx.clearRect(0, 0, offCanvas.width, offCanvas.height);
+        offCtx.lineCap = 'round';
+        offCtx.lineJoin = 'round';
+        offCtx.fillStyle = '#fff';
+        offCtx.strokeStyle = '#fff';
+
+        // 1. Build mask
+        // Hands
+        for (const landmarks of handsData) {
+          const points = landmarks.map(lmToCanvas);
+          const wrist = points[0], middle = points[9];
+          const handLength = Math.sqrt((middle.x - wrist.x) ** 2 + (middle.y - wrist.y) ** 2);
+          const w = handLength * 0.28;
+
+          offCtx.beginPath();
+          offCtx.moveTo(points[0].x, points[0].y);
+          offCtx.lineTo(points[1].x, points[1].y);
+          offCtx.lineTo(points[2].x, points[2].y);
+          offCtx.lineTo(points[5].x, points[5].y);
+          offCtx.lineTo(points[9].x, points[9].y);
+          offCtx.lineTo(points[13].x, points[13].y);
+          offCtx.lineTo(points[17].x, points[17].y);
+          offCtx.closePath();
+          offCtx.fill();
+          offCtx.lineWidth = w * 1.1;
+          offCtx.stroke();
+
+          const fingers = [
+            { pts: [2, 3, 4], width: w * 0.8 },
+            { pts: [5, 6, 7, 8], width: w * 0.65 },
+            { pts: [9, 10, 11, 12], width: w * 0.65 },
+            { pts: [13, 14, 15, 16], width: w * 0.58 },
+            { pts: [17, 18, 19, 20], width: w * 0.5 }
+          ];
+          for (let f of fingers) {
+            offCtx.lineWidth = f.width;
+            offCtx.beginPath();
+            offCtx.moveTo(points[f.pts[0]].x, points[f.pts[0]].y);
+            for (let i = 1; i < f.pts.length; i++) {
+              offCtx.lineTo(points[f.pts[i]].x, points[f.pts[i]].y);
+            }
+            offCtx.stroke();
+          }
+        }
+
+        // Faces dots for mask
+        for (const face of facesData) {
+          const points = face.map(lmToCanvas);
+          offCtx.beginPath();
+          for (const pt of points) {
+            offCtx.moveTo(pt.x + 2.5, pt.y);
+            offCtx.arc(pt.x, pt.y, 2.5, 0, Math.PI * 2);
+          }
+          offCtx.fill();
+        }
+
+        if (handsData.length > 0 || facesData.length > 0) {
+          ctx.globalCompositeOperation = 'lighter';
+          ctx.shadowColor = '#1a66ff';
+          ctx.shadowBlur = 45;
+          ctx.drawImage(offCanvas, 0, 0);
+          ctx.drawImage(offCanvas, 0, 0);
+          ctx.shadowBlur = 0;
+
+          offCtx.globalCompositeOperation = 'source-in';
+          offCtx.fillStyle = '#06080d';
+          offCtx.fillRect(0, 0, offCanvas.width, offCanvas.height);
+          offCtx.globalCompositeOperation = 'source-over';
+
+          ctx.globalCompositeOperation = 'source-over';
+          ctx.drawImage(offCanvas, 0, 0);
+        }
+
+        ctx.globalCompositeOperation = 'lighter';
+        const pulse = (Math.sin(performance.now() * 0.003) + 1) / 2;
+
+        // 3. Render Hand Veins
+        for (const landmarks of handsData) {
+          const points = landmarks.map(lmToCanvas);
+          const paths = { depth0: new Path2D(), depth1: new Path2D(), depth2: new Path2D() };
+
+          BONE_CONNECTIONS.forEach(pair => {
+            addToPaths(topologies['H-' + pair.join('-')], points[pair[0]], points[pair[1]], 2, paths);
+          });
+          WEB_CONNECTIONS.forEach(pair => {
+            addToPaths(topologies['H-' + pair.join('-')], points[pair[0]], points[pair[1]], 1, paths);
+          });
+
+          renderElectricPaths(ctx, paths, pulse);
+        }
+
+
+
+        requestAnimationFrame(loop);
+      }
+
+      requestAnimationFrame(loop);
+    })();
+  </script>
+</body>
+
+</html>

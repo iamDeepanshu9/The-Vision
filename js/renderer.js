@@ -8,16 +8,25 @@
  * @param {import('./nodes.js').LightNode[]} nodes
  * @param {import('./particles.js').ParticleSystem} particleSystem
  * @param {import('./hands.js').HandTracker} hands
+ * @param {HTMLVideoElement} videoEl
  */
-export function render(ctx, canvas, nodes, particleSystem, hands) {
+export function render(ctx, canvas, nodes, particleSystem, hands, videoEl) {
   const w = canvas.width;
   const h = canvas.height;
   const now = performance.now();
 
-  // ── Clear to pure black ──
+  // ── Draw mirrored video as background ──
   ctx.globalCompositeOperation = 'source-over';
-  ctx.fillStyle = '#000';
-  ctx.fillRect(0, 0, w, h);
+  ctx.clearRect(0, 0, w, h);
+  if (videoEl && videoEl.readyState >= 2) {
+    ctx.save();
+    ctx.globalAlpha = 0.35;
+    ctx.filter = 'blur(1px)';
+    ctx.translate(w, 0);
+    ctx.scale(-1, 1);
+    ctx.drawImage(videoEl, 0, 0, w, h);
+    ctx.restore();
+  }
 
   // Switch to additive blending for all glow effects
   ctx.globalCompositeOperation = 'lighter';
@@ -184,30 +193,32 @@ function drawCursors(ctx, hands) {
     const hand = hands[side];
     if (!hand.active) continue;
 
-    const { x, y } = hand.pos;
-
     if (hand.isPinching) {
-      // Pinching → bright compact dot
+      // Pinching → bright compact dot at midpoint
+      const { x, y } = hand.pos;
       const grad = ctx.createRadialGradient(x, y, 0, x, y, 7);
       grad.addColorStop(0, 'rgba(255, 255, 255, 0.95)');
       grad.addColorStop(0.4, 'rgba(180, 210, 255, 0.6)');
       grad.addColorStop(1, 'transparent');
-
       ctx.beginPath();
       ctx.arc(x, y, 7, 0, Math.PI * 2);
       ctx.fillStyle = grad;
       ctx.fill();
     } else {
-      // Open hand → glowing ring
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(x, y, 18, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(190, 215, 255, 0.30)';
-      ctx.lineWidth = 1.5;
-      ctx.shadowColor = 'rgba(170, 200, 255, 0.55)';
-      ctx.shadowBlur = 16;
-      ctx.stroke();
-      ctx.restore();
+      // Open hand → glowing dots on index tip AND thumb tip
+      const drawFingerDot = (fx, fy, r = 6) => {
+        const grad = ctx.createRadialGradient(fx, fy, 0, fx, fy, r);
+        grad.addColorStop(0, 'rgba(255, 255, 255, 0.85)');
+        grad.addColorStop(0.4, 'rgba(180, 210, 255, 0.45)');
+        grad.addColorStop(1, 'transparent');
+        ctx.beginPath();
+        ctx.arc(fx, fy, r, 0, Math.PI * 2);
+        ctx.fillStyle = grad;
+        ctx.fill();
+      };
+
+      if (hand.indexPos) drawFingerDot(hand.indexPos.x, hand.indexPos.y);
+      if (hand.thumbPos) drawFingerDot(hand.thumbPos.x, hand.thumbPos.y, 5);
     }
   }
 }

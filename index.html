@@ -16,8 +16,8 @@
 </head>
 
 <body>
-  <!-- Hidden video for webcam feed (used by MediaPipe, never rendered) -->
-  <video class="input-video" autoplay playsinline></video>d
+  <!-- Background video for webcam feed -->
+  <video class="input-video" autoplay playsinline></video>
 
   <!-- Game canvas -->
   <canvas id="game"></canvas>
@@ -44,6 +44,33 @@
   " onmouseover="this.style.color='rgba(255,255,255,0.75)'; this.style.background='rgba(255,255,255,0.09)';"
     onmouseout="this.style.color='rgba(255,255,255,0.45)'; this.style.background='rgba(255,255,255,0.05)';">
     Hand Visualizer Mode
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+      stroke-linejoin="round" style="width:14px; height:14px;">
+      <path d="M6 13l5-5-5-5" />
+    </svg>
+  </a>
+
+  <a href="paint.html" style="
+    position: fixed;
+    top: 24px; left: 210px;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    text-decoration: none;
+    color: rgba(255,255,255,0.45);
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0.2px;
+    padding: 8px 16px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 100px;
+    backdrop-filter: blur(10px);
+    transition: color 0.2s, background 0.2s;
+  " onmouseover="this.style.color='rgba(255,255,255,0.75)'; this.style.background='rgba(255,255,255,0.09)';"
+    onmouseout="this.style.color='rgba(255,255,255,0.45)'; this.style.background='rgba(255,255,255,0.05)';">
+    Camera Paint
     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
       stroke-linejoin="round" style="width:14px; height:14px;">
       <path d="M6 13l5-5-5-5" />

@@ -87,10 +87,9 @@ function processGestures() {
     }
   }
 
-  // Move grabbed node with right hand (smooth follow)
+  // Move grabbed node with right hand (snappy follow)
   if (grabbedNodeRight && rHand.isPinching && rHand.active) {
-    // Use lerp with a moderate factor — not too snappy
-    const lerpFactor = 0.25;
+    const lerpFactor = 0.9;
     grabbedNodeRight.x += (rHand.pos.x - grabbedNodeRight.x) * lerpFactor;
     grabbedNodeRight.y += (rHand.pos.y - grabbedNodeRight.y) * lerpFactor;
   }
@@ -119,7 +118,7 @@ function processGestures() {
   }
 
   if (grabbedNodeLeft && lHand.isPinching && lHand.active) {
-    const lerpFactor = 0.25;
+    const lerpFactor = 0.9;
     grabbedNodeLeft.x += (lHand.pos.x - grabbedNodeLeft.x) * lerpFactor;
     grabbedNodeLeft.y += (lHand.pos.y - grabbedNodeLeft.y) * lerpFactor;
   }
@@ -249,9 +248,9 @@ function processGestures() {
     // Find nearest unheld node
     const nearNode = nodeManager.findNearest(hand.pos.x, hand.pos.y, 180);
     if (nearNode && !nearNode.grabbedBy) {
-      // Map pinch tightness: 0 (fully closed) → min size; 0.06 (threshold) → full size
-      // pinchDist ranges 0..0.06 for squeezing; above threshold means "open"
-      const tightness = Math.max(0, Math.min(1, hand.pinchDist / 0.06));
+      // Map pinch tightness: 0 (fully closed) → min size; 0.05 (threshold) → full size
+      // pinchDist ranges 0..0.05 for squeezing; above threshold means "open"
+      const tightness = Math.max(0, Math.min(1, hand.pinchDist / 0.05));
       // At tightness=0 (fully pinched) → 30% of radius; at 1 (just at threshold) → 100%
       nearNode.targetDisplayRadius = nearNode.radius * (0.3 + 0.7 * tightness);
       nearNode.squeezed = true;
@@ -369,7 +368,7 @@ function loop() {
   particles.update();
 
   // Render
-  render(ctx, canvas, nodeManager.nodes, particles, tracker);
+  render(ctx, canvas, nodeManager.nodes, particles, tracker, videoEl);
 
   requestAnimationFrame(loop);
 }

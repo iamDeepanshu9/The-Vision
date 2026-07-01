@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MediaPipe × Three.js Face Morph Targets</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #1a1a2e; color: #eee; font-family: system-ui, sans-serif; overflow: hidden; }
+
+    #canvas-container { position: relative; width: 100vw; height: 100vh; }
+    canvas#three { display: block; width: 100%; height: 100%; }
+
+    /* Webcam PiP */
+    #pip {
+      position: absolute; bottom: 16px; left: 16px;
+      width: 180px; border-radius: 10px; overflow: hidden;
+      border: 2px solid rgba(255,255,255,0.2);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+    }
+    #pip video { width: 100%; display: block; transform: scaleX(-1); }
+    #pip canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+    /* HUD */
+    #hud {
+      position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+      display: flex; gap: 10px; align-items: center;
+    }
+    .badge {
+      padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: 600;
+      backdrop-filter: blur(10px);
+    }
+    .badge-loading { background: rgba(255,200,0,0.2); color: #ffc800; border: 1px solid #ffc800; }
+    .badge-live    { background: rgba(0,220,100,0.2); color: #00dc64; border: 1px solid #00dc64; }
+    .badge-err     { background: rgba(255,60,60,0.2);  color: #ff3c3c; border: 1px solid #ff3c3c; }
+
+    /* Blendshape bars panel */
+    #bs-panel {
+      position: absolute; top: 60px; right: 16px; bottom: 16px;
+      width: 210px; overflow-y: auto;
+      background: rgba(0,0,0,0.45); backdrop-filter: blur(12px);
+      border: 1px solid rgba(255,255,255,0.1); border-radius: 10px;
+      padding: 10px 12px;
+    }
+    #bs-panel h3 { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+    .bs-row { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
+    .bs-name { font-size: 10px; color: #aaa; width: 105px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
+    .bs-bar-bg { flex: 1; height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px; }
+    .bs-bar { height: 100%; border-radius: 2px; background: #00dc64; transition: width 0.05s linear; width: 0%; }
+    .bs-val { font-size: 10px; color: #666; width: 28px; text-align: right; flex-shrink: 0; }
+
+    #start-btn {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      padding: 14px 32px; font-size: 16px; font-weight: 600; cursor: pointer;
+      background: rgba(0,220,100,0.15); color: #00dc64;
+      border: 2px solid #00dc64; border-radius: 30px;
+      backdrop-filter: blur(12px);
+      transition: background 0.2s;
+    }
+    #start-btn:hover { background: rgba(0,220,100,0.3); }
+
+    #toggle-panel {
+      position: absolute; top: 60px; right: 230px;
+      padding: 6px 12px; font-size: 12px; cursor: pointer;
+      background: rgba(255,255,255,0.07); color: #aaa;
+      border: 1px solid rgba(255,255,255,0.15); border-radius: 8px;
+    }
+  </style>
+</head>
+<body>
+
+<div id="canvas-container">
+  <canvas id="three"></canvas>
+
+  <div id="pip" style="display:none;">
+    <video id="video" autoplay muted playsinline></video>
+    <canvas id="pip-canvas"></canvas>
+  </div>
+
+  <div id="hud">
+    <span id="status" class="badge badge-loading">Initialising…</span>
+    <span id="fps-badge" class="badge" style="background:rgba(255,255,255,0.07);color:#888;border:1px solid rgba(255,255,255,0.1);">-- fps</span>
+  </div>
+
+  <button id="start-btn" onclick="boot()">▶ Start Camera</button>
+  <button id="toggle-panel" style="display:none;" onclick="togglePanel()">Hide panel</button>
+
+  <div id="bs-panel" style="display:none;">
+    <h3>Blendshape scores</h3>
+    <div id="bs-rows"></div>
+  </div>
+</div>
+
+<!-- Three.js r150 via esm.sh (supports importmap-less browsers too) -->
+<script type="importmap">
+{
+  "imports": {
+    "three":          "https://cdn.jsdelivr.net/npm/three@0.150.1/build/three.module.js",
+    "three/addons/":  "https://cdn.jsdelivr.net/npm/three@0.150.1/examples/jsm/"
+  }
+}
+</script>
+
+<script async src="https://unpkg.com/es-module-shims@1.8.0/dist/es-module-shims.js"></script>
+
+<script type="module">
+import * as THREE       from 'three';
+import { GLTFLoader }   from 'three/addons/loaders/GLTFLoader.js';
+import { KTX2Loader }   from 'three/addons/loaders/KTX2Loader.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+/* ─── MediaPipe Tasks Vision ─── */
+const MP_VISION_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3';
+const MODEL_URL = `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`;
+
+/* ─── Three.js setup ─── */
+const canvas = document.getElementById('three');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.outputEncoding = THREE.sRGBEncoding;
+
+const scene  = new THREE.Scene();
+scene.background = new THREE.Color(0x1a1a2e);
+
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment()).texture;
+
+const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 20);
+camera.position.set(0, 0.15, 3.2);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.target.set(0, 0.15, 0);
+controls.minDistance = 1.5;
+controls.maxDistance = 5;
+
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+/* ─── Load facecap.glb ─── */
+let headMesh   = null;   // THREE.Mesh with morphTargetInfluences
+let headMixer  = null;
+const clock    = new THREE.Clock();
+
+const ktx2 = new KTX2Loader()
+  .setTranscoderPath('https://cdn.jsdelivr.net/npm/three@0.150.1/examples/jsm/libs/basis/')
+  .detectSupport(renderer);
+
+const loader = new GLTFLoader();
+loader.setKTX2Loader(ktx2);
+loader.setMeshoptDecoder(MeshoptDecoder);
+
+// Three.js official facecap.glb
+loader.load(
+  'https://threejs.org/examples/models/gltf/facecap.glb',
+  (gltf) => {
+    const root = gltf.scene.children[0];
+    scene.add(root);
+
+    headMixer = new THREE.AnimationMixer(root);
+    // Play the idle blink animation that ships with the file
+    if (gltf.animations.length) headMixer.clipAction(gltf.animations[0]).play();
+
+    // Find the mesh that has morph targets
+    root.traverse(obj => {
+      if (obj.isMesh && obj.morphTargetDictionary && !headMesh) {
+        headMesh = obj;
+        headMesh.frustumCulled = false;
+      }
+    });
+
+    buildBSPanel();
+    setStatus('live', 'Model loaded — click Start Camera');
+  },
+  undefined,
+  (err) => setStatus('err', 'Model failed: ' + err.message)
+);
+
+/* ─── Blendshape panel ─── */
+// The 52 ARKit blendshape names MediaPipe outputs (same order as facecap morph targets)
+const BLENDSHAPE_NAMES = [
+  '_neutral','browDownLeft','browDownRight','browInnerUp','browOuterUpLeft','browOuterUpRight',
+  'cheekPuff','cheekSquintLeft','cheekSquintRight',
+  'eyeBlinkLeft','eyeBlinkRight','eyeLookDownLeft','eyeLookDownRight',
+  'eyeLookInLeft','eyeLookInRight','eyeLookOutLeft','eyeLookOutRight',
+  'eyeLookUpLeft','eyeLookUpRight','eyeSquintLeft','eyeSquintRight',
+  'eyeWideLeft','eyeWideRight',
+  'jawForward','jawLeft','jawOpen','jawRight',
+  'mouthClose','mouthDimpleLeft','mouthDimpleRight',
+  'mouthFrownLeft','mouthFrownRight','mouthFunnel',
+  'mouthLeft','mouthLowerDownLeft','mouthLowerDownRight',
+  'mouthPressLeft','mouthPressRight','mouthPucker',
+  'mouthRight','mouthRollLower','mouthRollUpper','mouthShrugLower','mouthShrugUpper',
+  'mouthSmileLeft','mouthSmileRight','mouthStretchLeft','mouthStretchRight',
+  'mouthUpperUpLeft','mouthUpperUpRight',
+  'noseSneerLeft','noseSneerRight',
+];
+
+const bsBarEls = {};   // name -> { bar, val }
+
+function buildBSPanel() {
+  const container = document.getElementById('bs-rows');
+  BLENDSHAPE_NAMES.forEach(name => {
+    const row = document.createElement('div');
+    row.className = 'bs-row';
+    row.innerHTML = `
+      <span class="bs-name" title="${name}">${name}</span>
+      <div class="bs-bar-bg"><div class="bs-bar" id="bar-${name}"></div></div>
+      <span class="bs-val" id="val-${name}">0</span>`;
+    container.appendChild(row);
+    bsBarEls[name] = {
+      bar: document.getElementById('bar-' + name),
+      val: document.getElementById('val-' + name),
+    };
+  });
+}
+
+function updateBSPanel(scores) {
+  scores.forEach(({ displayName, categoryName, score }) => {
+    const key = displayName || categoryName;
+    if (bsBarEls[key]) {
+      const pct = Math.round(score * 100);
+      bsBarEls[key].bar.style.width = pct + '%';
+      bsBarEls[key].bar.style.background = pct > 50 ? '#00bfff' : '#00dc64';
+      bsBarEls[key].val.textContent = pct;
+    }
+  });
+}
+
+/* ─── Apply blendshapes to Three.js morph targets ─── */
+/*
+  facecap.glb morph target names look like  "blendShape1.browInnerUp"
+  MediaPipe gives us plain names like        "browInnerUp"
+  We build a name→index map once.
+*/
+let morphMap = null;   // { mediapipeName: morphIndex }
+
+function buildMorphMap() {
+  if (!headMesh || morphMap) return;
+  morphMap = {};
+  const dict = headMesh.morphTargetDictionary;
+  for (const [key, idx] of Object.entries(dict)) {
+    // strip "blendShape1." prefix if present
+    const plain = key.replace(/^blendShape1\./, '');
+    morphMap[plain] = idx;
+  }
+}
+
+// Smoothing: exponential moving average per target
+const smoothed = {};
+const SMOOTH = 0.4;   // 0 = instant, 1 = never moves
+
+function applyBlendshapes(scores) {
+  buildMorphMap();
+  if (!headMesh || !morphMap) return;
+
+  scores.forEach(({ displayName, categoryName, score }) => {
+    const name = displayName || categoryName;
+    const idx  = morphMap[name];
+    if (idx === undefined) return;
+
+    // smooth
+    smoothed[idx] = smoothed[idx] === undefined
+      ? score
+      : smoothed[idx] * SMOOTH + score * (1 - SMOOTH);
+
+    headMesh.morphTargetInfluences[idx] = smoothed[idx];
+  });
+}
+
+/* ─── Head-pose from facial transformation matrix ─── */
+let headBone = null;
+
+function findHeadBone(root) {
+  root.traverse(obj => {
+    if (!headBone && obj.isBone) headBone = obj;
+  });
+}
+
+const poseMatrix = new THREE.Matrix4();
+const poseQuat   = new THREE.Quaternion();
+const posePos    = new THREE.Vector3();
+const poseScale  = new THREE.Vector3();
+const smoothQuat = new THREE.Quaternion();
+const POSE_SMOOTH = 0.35;
+
+function applyHeadPose(matrixData) {
+  if (!headBone) return;
+  poseMatrix.fromArray(matrixData);
+  poseMatrix.decompose(posePos, poseQuat, poseScale);
+  smoothQuat.slerp(poseQuat, 1 - POSE_SMOOTH);
+  headBone.quaternion.copy(smoothQuat);
+}
+
+/* ─── MediaPipe FaceLandmarker ─── */
+let faceLandmarker = null;
+let video = null;
+let detecting = false;
+
+window.boot = async function() {
+  document.getElementById('start-btn').style.display = 'none';
+  setStatus('loading', 'Loading MediaPipe…');
+
+  try {
+    const { FaceLandmarker, FilesetResolver } = await import(
+      `${MP_VISION_URL}/vision_bundle.js`
+    );
+
+    const filesetResolver = await FilesetResolver.forVisionTasks(
+      `${MP_VISION_URL}/wasm`
+    );
+
+    faceLandmarker = await FaceLandmarker.createFromOptions(filesetResolver, {
+      baseOptions: {
+        modelAssetPath: MODEL_URL,
+        delegate: 'GPU',
+      },
+      outputFaceBlendshapes: true,
+      outputFacialTransformationMatrixes: true,
+      runningMode: 'VIDEO',
+      numFaces: 1,
+    });
+
+    setStatus('loading', 'Starting camera…');
+    video = document.getElementById('video');
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: 640, height: 480, facingMode: 'user' },
+    });
+    video.srcObject = stream;
+    await new Promise(r => { video.onloadedmetadata = r; });
+    video.play();
+
+    document.getElementById('pip').style.display = 'block';
+    document.getElementById('bs-panel').style.display = 'block';
+    document.getElementById('toggle-panel').style.display = 'block';
+
+    if (headMesh) {
+      headMesh.traverse = headMesh.traverse; // no-op, just ensure mesh init
+    }
+
+    // find head bone after model load
+    scene.traverse(obj => {
+      if (!headBone && obj.isBone) headBone = obj;
+    });
+
+    setStatus('live', '● Live');
+    detecting = true;
+    detectFrame();
+  } catch (e) {
+    console.error(e);
+    setStatus('err', e.message || 'Failed');
+    document.getElementById('start-btn').style.display = 'block';
+  }
+};
+
+let lastVideoTime = -1;
+let frameCount = 0;
+let fpsTimer = performance.now();
+
+function detectFrame() {
+  if (!detecting) return;
+  requestAnimationFrame(detectFrame);
+
+  if (!video || video.readyState < 2) return;
+  const now = performance.now();
+  if (video.currentTime === lastVideoTime) return;
+  lastVideoTime = video.currentTime;
+
+  const results = faceLandmarker.detectForVideo(video, now);
+
+  // Blendshapes
+  if (results.faceBlendshapes?.length > 0) {
+    const scores = results.faceBlendshapes[0].categories;
+    applyBlendshapes(scores);
+    updateBSPanel(scores);
+  }
+
+  // Head pose
+  if (results.facialTransformationMatrixes?.length > 0) {
+    applyHeadPose(results.facialTransformationMatrixes[0].data);
+  }
+
+  // FPS counter
+  frameCount++;
+  if (now - fpsTimer > 1000) {
+    document.getElementById('fps-badge').textContent = frameCount + ' fps';
+    frameCount = 0;
+    fpsTimer = now;
+  }
+}
+
+/* ─── Three.js render loop ─── */
+function animate() {
+  requestAnimationFrame(animate);
+  const delta = clock.getDelta();
+  if (headMixer) headMixer.update(delta * 0.3); // slow down idle anim; live BS takes over
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+/* ─── Helpers ─── */
+function setStatus(type, msg) {
+  const el = document.getElementById('status');
+  el.className = 'badge badge-' + type;
+  el.textContent = msg;
+}
+
+let panelVisible = true;
+window.togglePanel = function() {
+  panelVisible = !panelVisible;
+  document.getElementById('bs-panel').style.display = panelVisible ? 'block' : 'none';
+  document.getElementById('toggle-panel').textContent = panelVisible ? 'Hide panel' : 'Show panel';
+};
+
+</script>
+</body>
+</html>

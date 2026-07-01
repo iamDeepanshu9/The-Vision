@@ -1,7 +1,7 @@
 // ── Hand Tracking ──
 // Wraps MediaPipe Hands into a clean state object for the game loop.
 
-const PINCH_THRESHOLD = 0.06;
+const PINCH_THRESHOLD = 0.05;
 const VELOCITY_BUFFER_SIZE = 3;
 const VELOCITY_MULTIPLIER = 28;
 
@@ -19,6 +19,8 @@ function createHandState() {
     wasPinching: false,
     pinchDist: 1.0,
     pos: { x: 0, y: 0 },
+    indexPos: { x: 0, y: 0 },
+    thumbPos: { x: 0, y: 0 },
     posHistory: [],
     velocity: { x: 0, y: 0 },
     // Punch
@@ -109,8 +111,13 @@ export class HandTracker {
       const indexTip = landmarks[8];
       const thumbTip = landmarks[4];
 
-      hand.pos.x = (1 - indexTip.x) * this.canvasWidth;
-      hand.pos.y = indexTip.y * this.canvasHeight;
+      hand.indexPos.x = (1 - indexTip.x) * this.canvasWidth;
+      hand.indexPos.y = indexTip.y * this.canvasHeight;
+      hand.thumbPos.x = (1 - thumbTip.x) * this.canvasWidth;
+      hand.thumbPos.y = thumbTip.y * this.canvasHeight;
+      
+      hand.pos.x = (hand.indexPos.x + hand.thumbPos.x) / 2;
+      hand.pos.y = (hand.indexPos.y + hand.thumbPos.y) / 2;
 
       // Pinch
       const pdx = thumbTip.x - indexTip.x;
